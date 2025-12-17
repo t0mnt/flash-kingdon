@@ -1,7 +1,7 @@
 import torch
 import triton
 import triton.language as tl
-from .vga2d import weighted_gp_kernel, gate_kernel, weighted_gp_grad_kernel
+from .vga2d import weighted_gp_grad_kernel, weighted_gp_gelu_kernel
 
 MV_DIM = 4
 NUM_GRADES = 3
@@ -81,16 +81,12 @@ def gelu_wgp_norm_kernel_fwd(
     y2 = tl.load(y_ptr + 2 * stride_component + base_offset, mask=batch_feature_mask)
     y3 = tl.load(y_ptr + 3 * stride_component + base_offset, mask=batch_feature_mask)
     
-    # Apply GELU gate
-    gate_x = compute_gelu_gate(x0)
-    gate_y = compute_gelu_gate(y0)
-
-    xvals = gate_kernel((x0,x1,x2,x3), (gate_x,))  # X * GATE_X
-    yvals = gate_kernel((y0,y1,y2,y3), (gate_y,))  # Y * GATE_Y
+    xvals = (x0,x1,x2,x3)
+    yvals = (y0,y1,y2,y3)
     # Order of the weights has to be changed to match the original hand-optimized code
     # in the tests, but this can be done anyway with
     wvals = (w0, w1, w2, w4, w3, w6, w5, w9, w8, w7)
-    o0,o1,o2,o3 = weighted_gp_kernel(xvals, yvals, (wvals,))
+    o0,o1,o2,o3 = weighted_gp_gelu_kernel(xvals, yvals, (wvals,))
     
     if NORMALIZE:
         pn_scalar = tl.sum(o0 * o0, axis=1) / n_features
@@ -346,11 +342,8 @@ def gelu_wgp_norm_kernel_bwd(
         go3 = go3/rms_pseudo - o3 * dot_pseudo / (n_features*rms_pseudo*rms_pseudo)
 
     # weighted geometric product backward
-    gate_x = compute_gelu_gate(x0_raw)
-    gate_y = compute_gelu_gate(y0_raw)
-
-    xvals = gate_kernel((x0_raw,x1_raw,x2_raw,x3_raw), (gate_x,))  # X * GATE_X
-    yvals = gate_kernel((y0_raw,y1_raw,y2_raw,y3_raw), (gate_y,))  # Y * GATE_Y
+    xvals = (x0_raw,x1_raw,x2_raw,x3_raw)
+    yvals = (y0_raw,y1_raw,y2_raw,y3_raw)
     wvals = (w0, w1, w2, w3, w4, w5, w6, w7, w8, w9)
     grads, = weighted_gp_grad_kernel(xvals, yvals, (wvals,), (go0,go1,go2,go3)) # Returns a scalar, which we unpack immidiatelly.
 
@@ -368,20 +361,6 @@ def gelu_wgp_norm_kernel_bwd(
     w_grad_7 = tl.sum(_w_grad_7, axis=0)
     w_grad_8 = tl.sum(_w_grad_8, axis=0)
     w_grad_9 = tl.sum(_w_grad_9, axis=0)
-
-    # GELU gate gradients
-    dgate_x = compute_gelu_gate_grad(x0_raw)
-    dgate_y = compute_gelu_gate_grad(y0_raw)
-
-    x_grad_0 = (gate_x + x0_raw*dgate_x) * x_grad_0 + dgate_x * (x1_raw*x_grad_1 + x2_raw*x_grad_2 + x3_raw*x_grad_3)
-    x_grad_1 = gate_x * x_grad_1
-    x_grad_2 = gate_x * x_grad_2
-    x_grad_3 = gate_x * x_grad_3
-
-    y_grad_0 = (gate_y + y0_raw*dgate_y) * y_grad_0 + dgate_y * (y1_raw*y_grad_1 + y2_raw*y_grad_2 + y3_raw*y_grad_3)
-    y_grad_1 = gate_y * y_grad_1
-    y_grad_2 = gate_y * y_grad_2
-    y_grad_3 = gate_y * y_grad_3
 
     tl.store(grad_x_ptr + 0 * stride_component + base_offset, x_grad_0, mask=batch_feature_mask)
     tl.store(grad_x_ptr + 1 * stride_component + base_offset, x_grad_1, mask=batch_feature_mask)
