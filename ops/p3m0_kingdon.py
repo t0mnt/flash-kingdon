@@ -1,7 +1,7 @@
 import torch
 import triton
 import triton.language as tl
-from .vga3d import weighted_gp_kernel, gate_kernel, weighted_gp_grad_kernel
+from .vga3d import weighted_gp_gelu_kernel, weighted_gp_grad_kernel
 
 MV_DIM = 8
 NUM_GRADES = 4
@@ -99,16 +99,12 @@ def gelu_wgp_norm_kernel_fwd(
     y6 = tl.load(y_ptr + 6 * stride_component + base_offset, mask=batch_feature_mask)
     y7 = tl.load(y_ptr + 7 * stride_component + base_offset, mask=batch_feature_mask)
 
-    # Apply GELU gate
-    gate_x = compute_gelu_gate(x0)
-    gate_y = compute_gelu_gate(y0)
-
-    xvals = gate_kernel((x0,x1,x2,x3,x4,x5,x6,x7), (gate_x,))  # X * GATE_X
-    yvals = gate_kernel((y0,y1,y2,y3,y4,y5,y6,y7), (gate_y,))  # Y * GATE_Y
+    xvals = (x0,x1,x2,x3,x4,x5,x6,x7)
+    yvals = (y0,y1,y2,y3,y4,y5,y6,y7)
     # Order of the weights has to be changed to match the original hand-optimized code
     # in the tests, but this can be done anyway with
     wvals = (w0,w1,w2,w3,w5,w4,w7,w6,w9,w8,w13,w11,w15,w10,w14,w12,w19,w18,w17,w16)
-    o0,o1,o2,o3,o4,o5,o6,o7 = weighted_gp_kernel(xvals, yvals, (wvals,))
+    o0,o1,o2,o3,o4,o5,o6,o7 = weighted_gp_gelu_kernel(xvals, yvals, (wvals,))
 
     if NORMALIZE:
         pn_scalar = tl.sum(o0 * o0, axis=1) / n_features
@@ -420,11 +416,8 @@ def gelu_wgp_norm_kernel_bwd(
         go7 = go7/rms_pseudo - o7 * dot_pseudo / (n_features*rms_pseudo*rms_pseudo)
 
     # weighted geometric product backward
-    gate_x = compute_gelu_gate(x0_raw)
-    gate_y = compute_gelu_gate(y0_raw)
-
-    xvals = gate_kernel((x0_raw,x1_raw,x2_raw,x3_raw,x4_raw,x5_raw,x6_raw,x7_raw), (gate_x,))  # X * GATE_X
-    yvals = gate_kernel((y0_raw,y1_raw,y2_raw,y3_raw,y4_raw,y5_raw,y6_raw,y7_raw), (gate_y,))  # Y * GATE_Y
+    xvals = (x0_raw,x1_raw,x2_raw,x3_raw,x4_raw,x5_raw,x6_raw,x7_raw)
+    yvals = (y0_raw,y1_raw,y2_raw,y3_raw,y4_raw,y5_raw,y6_raw,y7_raw)
     wvals = (w0, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, w16, w17, w18, w19)
     grads, = weighted_gp_grad_kernel(xvals, yvals, (wvals,), (go0,go1,go2,go3,go4,go5,go6,go7)) # Returns a scalar, which we unpack immidiatelly.
 
@@ -454,32 +447,6 @@ def gelu_wgp_norm_kernel_bwd(
     w_grad_17 = tl.sum(_w_grad_17, axis=0)
     w_grad_18 = tl.sum(_w_grad_18, axis=0)
     w_grad_19 = tl.sum(_w_grad_19, axis=0)
-
-    # GELU gate gradients
-    dgate_x = compute_gelu_gate_grad(x0_raw)
-    dgate_y = compute_gelu_gate_grad(y0_raw)
-
-    x_grad_0 = (gate_x + x0_raw*dgate_x) * x_grad_0 + dgate_x * (x1_raw*x_grad_1 + x2_raw*x_grad_2 + x3_raw*x_grad_3 + 
-                                                                 x4_raw*x_grad_4 + x5_raw*x_grad_5 + x6_raw*x_grad_6 + 
-                                                                 x7_raw*x_grad_7)
-    x_grad_1 = gate_x * x_grad_1
-    x_grad_2 = gate_x * x_grad_2
-    x_grad_3 = gate_x * x_grad_3
-    x_grad_4 = gate_x * x_grad_4
-    x_grad_5 = gate_x * x_grad_5
-    x_grad_6 = gate_x * x_grad_6
-    x_grad_7 = gate_x * x_grad_7
-
-    y_grad_0 = (gate_y + y0_raw*dgate_y) * y_grad_0 + dgate_y * (y1_raw*y_grad_1 + y2_raw*y_grad_2 + y3_raw*y_grad_3 + 
-                                                                 y4_raw*y_grad_4 + y5_raw*y_grad_5 + y6_raw*y_grad_6 + 
-                                                                 y7_raw*y_grad_7)
-    y_grad_1 = gate_y * y_grad_1
-    y_grad_2 = gate_y * y_grad_2
-    y_grad_3 = gate_y * y_grad_3
-    y_grad_4 = gate_y * y_grad_4
-    y_grad_5 = gate_y * y_grad_5
-    y_grad_6 = gate_y * y_grad_6
-    y_grad_7 = gate_y * y_grad_7
 
     tl.store(grad_x_ptr + 0 * stride_component + base_offset, x_grad_0, mask=batch_feature_mask)
     tl.store(grad_x_ptr + 1 * stride_component + base_offset, x_grad_1, mask=batch_feature_mask)

@@ -11,7 +11,8 @@ import triton
 from .kingdon_ops import wgp_grad, number_of_wgp_terms, wgp_gelu
 from .printing import TritonPrinter
 
-VGA2D = Algebra(2)
+printer = TritonPrinter()
+VGA2D = Algebra(2, printer=printer)
 X = VGA2D.multivector(name='x')
 Y = VGA2D.multivector(name='y')
 ws = symbols(f'w:{number_of_wgp_terms(X, Y)}')
@@ -19,9 +20,8 @@ weights = VGA2D.scalar(e=ws)
 go = VGA2D.multivector(name='go')
 
 # Mark the weighted geometric product and its gradient for compilation.
-weighted_gp_gelu = VGA2D.compile(wgp_gelu, symbolic=True, codegen_symbolcls=Symbol, printer=TritonPrinter)
-weighted_gp_grad = VGA2D.compile(wgp_grad, symbolic=True, codegen_symbolcls=Symbol, printer=TritonPrinter)
-# print(weighted_gp_grad(X, Y, weights, go))
+weighted_gp_gelu = VGA2D.compile(wgp_gelu, symbolic=True, codegen_symbolcls=Symbol)
+weighted_gp_grad = VGA2D.compile(wgp_grad, symbolic=True, codegen_symbolcls=Symbol)
 # Extract the compiled function for inputs X, Y, weights (and go <-> gradient output).
 weighted_gp_gelu_func = weighted_gp_gelu[X, Y, weights].func
 weighted_gp_grad_func = weighted_gp_grad[X, Y, weights, go].func
